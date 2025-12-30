@@ -1,121 +1,61 @@
 const WebSocket = require("ws");
+const wss = new WebSocket.Server({ port: process.env.PORT || 10000 });
 
-const PORT = process.env.PORT || 3000;
-const wss = new WebSocket.Server({ port: PORT });
+console.log("🟢 네오크리 서버 시작");
 
-let rooms = {};
+const players = new Map(); // ws → playerData
+const queue = []; // 경쟁전 대기열
+const rooms = {};
 
-console.log("🟢 네오크리 서버 시작:", PORT);
+function getRank(trophy){
+  if(trophy<10) return "브론즈";
+  if(trophy<30) return "실버";
+  if(trophy<70) return "골드";
+  if(trophy<150) return "프로";
+  if(trophy<300) return "다이아";
+  return "네오크리";
+}
 
 wss.on("connection", ws => {
+  players.set(ws,{ trophy:0, rank:"브론즈" });
 
   ws.on("message", msg => {
-    let data;
-    try {
-      data = JSON.parse(msg);
-    } catch {
-      return;
-    }
+    const d = JSON.parse(msg);
+    const p = players.get(ws);
 
-    // 방 생성
-    if (data.type === "createRoom") {
-      const roomId = Math.random().toString(36).substring(2, 8);
-      rooms[roomId] = {
-        players: [],
-        bossHp: 90000000
-      };
+    /* PvE 트로피 */
+    if(d.type==="pve-clear"){
+      p.trophy++;
+      p.rank=getRank(p.trophy);
       ws.send(JSON.stringify({
-        type: "roomCreated",
-        roomId
+        type:"pve-reward",
+        trophy:p.trophy,
+        rank:p.rank
       }));
     }
 
-    // 방 참가
-    if (data.type === "joinRoom") {
-      const room = rooms[data.roomId];
-      if (!room) {
-        ws.send(JSON.stringify({
-          type: "error",
-          msg: "방이 존재하지 않습니다"
-        }));
-        return;
+    /* 경쟁전 매칭 */
+    if(d.type==="rank-queue"){
+      queue.push(ws);
+      if(queue.length>=2){
+        const a=queue.shift();
+        const b=queue.shift();
+        a.send(JSON.stringify({type:"rank-start"}));
+        b.send(JSON.stringify({type:"rank-start"}));
       }
-
-      ws.roomId = data.roomId;
-      ws.name = data.name || "플레이어";
-      ws.trophy = ws.trophy || 0;
-
-      room.players.push(ws);
-
-      broadcast(room, {
-        type: "system",
-        msg: `${ws.name} 입장 (${room.players.length}명)`
-      });
     }
 
-    // 채팅
-    if (data.type === "chat") {
-      const room = rooms[ws.roomId];
-      if (!room) return;
-
-      broadcast(room, {
-        type: "chat",
-        name: ws.name,
-        msg: data.msg
-      });
-    }
-
-    // PvP 판정 (간단)
-    if (data.type === "pvp") {
-      const my = data.power + Math.random() * 50;
-      const enemy = data.enemyPower + Math.random() * 50;
-      const win = my > enemy;
-
-      if (win) ws.trophy++;
-
+    /* 경쟁전 결과 */
+    if(d.type==="rank-win"){
+      p.trophy+=2;
+      p.rank=getRank(p.trophy);
       ws.send(JSON.stringify({
-        type: "pvpResult",
-        result: win ? "승리" : "패배",
-        trophy: ws.trophy
+        type:"rank-result",
+        trophy:p.trophy,
+        rank:p.rank
       }));
     }
-
-    // 보스 공격
-    if (data.type === "bossHit") {
-      const room = rooms[ws.roomId];
-      if (!room) return;
-
-      room.bossHp -= data.damage;
-      if (room.bossHp < 0) room.bossHp = 0;
-
-      broadcast(room, {
-        type: "bossUpdate",
-        hp: room.bossHp
-      });
-    }
   });
 
-  ws.on("close", () => {
-    const room = rooms[ws.roomId];
-    if (!room) return;
-
-    room.players = room.players.filter(p => p !== ws);
-
-    broadcast(room, {
-      type: "system",
-      msg: `${ws.name} 퇴장`
-    });
-
-    if (room.players.length === 0) {
-      delete rooms[ws.roomId];
-    }
-  });
+  ws.on("close",()=>players.delete(ws));
 });
-
-function broadcast(room, data) {
-  room.players.forEach(p => {
-    if (p.readyState === WebSocket.OPEN) {
-      p.send(JSON.stringify(data));
-    }
-  });
-}
