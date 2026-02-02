@@ -1,61 +1,39 @@
-const WebSocket = require("ws");
-const wss = new WebSocket.Server({ port: process.env.PORT || 10000 });
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 
-console.log("🟢 네오크리 서버 시작");
+const app = express();
+const server = http.createServer(app);
 
-const players = new Map(); // ws → playerData
-const queue = []; // 경쟁전 대기열
-const rooms = {};
-
-function getRank(trophy){
-  if(trophy<10) return "브론즈";
-  if(trophy<30) return "실버";
-  if(trophy<70) return "골드";
-  if(trophy<150) return "프로";
-  if(trophy<300) return "다이아";
-  return "네오크리";
-}
-
-wss.on("connection", ws => {
-  players.set(ws,{ trophy:0, rank:"브론즈" });
-
-  ws.on("message", msg => {
-    const d = JSON.parse(msg);
-    const p = players.get(ws);
-
-    /* PvE 트로피 */
-    if(d.type==="pve-clear"){
-      p.trophy++;
-      p.rank=getRank(p.trophy);
-      ws.send(JSON.stringify({
-        type:"pve-reward",
-        trophy:p.trophy,
-        rank:p.rank
-      }));
+// 모든 접속을 허용하는 설정 (CORS)
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
     }
+});
 
-    /* 경쟁전 매칭 */
-    if(d.type==="rank-queue"){
-      queue.push(ws);
-      if(queue.length>=2){
-        const a=queue.shift();
-        const b=queue.shift();
-        a.send(JSON.stringify({type:"rank-start"}));
-        b.send(JSON.stringify({type:"rank-start"}));
-      }
-    }
+// 브라우저로 그냥 접속했을 때 보일 화면
+app.get('/', (req, res) => {
+    res.send('<h1>OpenWave Pro 서버 작동 중!</h1>');
+});
 
-    /* 경쟁전 결과 */
-    if(d.type==="rank-win"){
-      p.trophy+=2;
-      p.rank=getRank(p.trophy);
-      ws.send(JSON.stringify({
-        type:"rank-result",
-        trophy:p.trophy,
-        rank:p.rank
-      }));
-    }
-  });
+// 실시간 통신 부분
+io.on('connection', (socket) => {
+    console.log('새로운 친구 접속:', socket.id);
 
-  ws.on("close",()=>players.delete(ws));
+    // 메시지 받기
+    socket.on('send_msg', (data) => {
+        // 모든 접속자에게 받은 메시지 그대로 전달 (무제한!)
+        io.emit('receive_msg', data);
+    });
+
+    socket.on('disconnect', () => {
+        console.log('친구 나감');
+    });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`서버가 포트 ${PORT}에서 달리는 중!`);
 });
